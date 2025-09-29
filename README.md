@@ -11,8 +11,8 @@ The agent exposes several tools for querying and analyzing BigQuery data. Each t
 - Returns a list of all datasets available in the BigQuery project. 
 - `Description`: "Return all datasets in this Google BigQuery project."
 
-### GetTableGraph: Retrieves the schema and relationships for tables within specified datasets.
-
+### GetTableGraph: 
+- Retrieves the schema and relationships for tables within specified datasets.
 - `Description`: "Returns the tables, their schemas and how those tables are connected."
 
 ### GetRelevantQuestions:
@@ -24,8 +24,8 @@ The agent exposes several tools for querying and analyzing BigQuery data. Each t
 - Fetches a limited number of distinct string values from a specified column.
 - `Description`: "Return up to limit distinct string values for a non-numeric column."
 
-### ValidateQuestionSQL: Performs a dry-run of a SQL query and validates its correctness against a given question.
-
+### ValidateQuestionSQL: 
+- Performs a dry-run of a SQL query and validates its correctness against a given question.
 - `Description`: "Dry-run/EXPLAIN the SQL, then ask LLM if the generated SQL can correctly answer the question."
 
 ### ExecuteSQL:
