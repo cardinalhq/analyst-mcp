@@ -40,18 +40,13 @@ async function httpGet<T>(path: string): Promise<T> {
 // Types shared with backend
 // ---------------------------
 
-export type BackendResourceMeta = {
-  uri: string;             // e.g. "resource://glossary"
-  name?: string;
-  description?: string;
-  mimeType?: string;       // e.g. "text/markdown" | "application/json"
+export type ResourceDoc = {
+  id: string;              // resource identifier
+  title?: string;
+  type?: string;           // e.g. "gen", "reasoning", "facts"
+  text?: string;
   etag?: string;
-  tags?: string[];
-};
-
-export type BackendResource = BackendResourceMeta & {
-  text?: string;           // if textual content
-  json?: any;              // if JSON content
+  embedding?: number[];
 };
 
 // ---------------------------
@@ -167,42 +162,77 @@ registerTool({
 // --- Resource management tools (persisted on backend) ---
 
 registerTool({
-  name: 'UpsertResource',
-  description:
-      'Create or update a resource (e.g., glossary/taxonomy) so it persists across sessions and is visible to the agent and backend.',
+  name: 'ListResources',
+  description: 'List all resources, or search resources by semantic similarity using query, topK, and type filters.',
   inputSchema: {
     type: 'object',
-    required: ['uri'],
     properties: {
-      uri: { type: 'string' },
-      name: { type: 'string' },
-      description: { type: 'string' },
-      mimeType: { type: 'string' },
-      tags: { type: 'array', items: { type: 'string' } },
-      text: { type: 'string' },
-      json: { type: 'object' },
+      q: { type: 'string', description: 'Search query for semantic similarity search' },
+      topK: { type: 'number', description: 'Number of top results to return (default: 10)' },
+      type: { type: 'string', enum: ['gen', 'reasoning', 'both', 'facts'], description: 'Filter by resource type' },
     },
-    oneOf: [
-      { required: ['text'] },
-      { required: ['json'] },
-    ],
+  },
+  outputSchema: { type: 'array', items: { type: 'object' } },
+  handler: async ({ q, topK, type }) => {
+    const params = new URLSearchParams();
+    if (q) params.set('q', q);
+    if (topK != null) params.set('topK', String(topK));
+    if (type) params.set('type', type);
+    const query = params.toString();
+    const url = query ? `/resources?${query}` : '/resources';
+    return httpGet<any[]>(url);
+  },
+});
+
+registerTool({
+  name: 'GetResource',
+  description: 'Get a single resource by ID or URI.',
+  inputSchema: {
+    type: 'object',
+    required: ['id'],
+    properties: {
+      id: { type: 'string', description: 'Resource ID or URI' },
+    },
+  },
+  outputSchema: { type: 'object' },
+  handler: async ({ id }) => {
+    const url = `/resources/get?id=${encodeURIComponent(id)}`;
+    return httpGet<any>(url);
+  },
+});
+
+registerTool({
+  name: 'UpsertResource',
+  description:
+      'Create or update a resource (e.g., glossary/taxonomy) so it persists across sessions and is visible to the agent and backend. Supports auto-embedding if text is provided without embedding.',
+  inputSchema: {
+    type: 'object',
+    required: ['id'],
+    properties: {
+      id: { type: 'string', description: 'Resource ID/URI' },
+      title: { type: 'string' },
+      type: { type: 'string', description: 'Resource type: gen, reasoning, facts, etc.' },
+      text: { type: 'string' },
+      etag: { type: 'string' },
+      embedding: { type: 'array', items: { type: 'number' } },
+    },
   },
   outputSchema: { type: 'object' },
   handler: async (args) =>
-      httpPost<BackendResourceMeta>('/resources/upsert', args),
+      httpPost<any>('/resources/upsert', args),
 });
 
 registerTool({
   name: 'DeleteResource',
-  description: 'Delete a resource by URI from the persistent backend.',
+  description: 'Delete a resource by ID from the persistent backend.',
   inputSchema: {
     type: 'object',
-    required: ['uri'],
-    properties: { uri: { type: 'string' } },
+    required: ['id'],
+    properties: { id: { type: 'string' } },
   },
   outputSchema: { type: 'object' },
-  handler: async ({ uri }) =>
-      httpPost<{ ok: boolean }>('/resources/delete', { uri }),
+  handler: async ({ id }) =>
+      httpPost<{ status: string }>('/resources/delete', { id }),
 });
 
 // ---------------------------
@@ -243,41 +273,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
 
 // List known resources (proxied from backend)
 server.setRequestHandler(ListResourcesRequestSchema, async (_req: ListResourcesRequest) => {
-  const list = await httpGet<BackendResourceMeta[]>('/resources/list');
+  const list = await httpGet<ResourceDoc[]>('/resources');
   return {
     resources: list.map((r) => ({
-      uri: r.uri,
-      name: r.name ?? r.uri,
-      description: r.description ?? '',
-      mimeType: r.mimeType ?? 'text/plain',
+      uri: r.id,
+      name: r.title ?? r.id,
+      description: r.type ? `Type: ${r.type}` : '',
+      mimeType: 'text/plain',
     })),
   };
 });
 
-// Read a single resource content by URI
+// Read a single resource content by ID
 server.setRequestHandler(ReadResourceRequestSchema, async (req: ReadResourceRequest) => {
   const { uri } = req.params;
-  const r = await httpGet<BackendResource>(`/resources/get?uri=${encodeURIComponent(uri)}`);
+  const r = await httpGet<ResourceDoc>(`/resources/get?id=${encodeURIComponent(uri)}`);
 
-  // Prefer JSON if present
-  if (r.mimeType === 'application/json' && r.json !== undefined) {
-    return {
-      contents: [
-        {
-          uri: r.uri,
-          mimeType: 'application/json',
-          text: JSON.stringify(r.json, null, 2),
-        },
-      ],
-    };
-  }
-
-  // Fallback to text (or empty string)
   return {
     contents: [
       {
-        uri: r.uri,
-        mimeType: r.mimeType ?? 'text/plain',
+        uri: r.id,
+        mimeType: 'text/plain',
         text: r.text ?? '',
       },
     ],
