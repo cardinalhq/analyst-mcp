@@ -166,6 +166,7 @@ registerTool({
   description: 'List all resources, or search resources by semantic similarity using query, topK, and type filters.',
   inputSchema: {
     type: 'object',
+    required: ['q'],
     properties: {
       q: { type: 'string', description: 'Search query for semantic similarity search' },
       topK: { type: 'number', description: 'Number of top results to return (default: 10)' },
