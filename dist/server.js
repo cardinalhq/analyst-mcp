@@ -36,19 +36,48 @@ function registerTool(def) {
 registerTool({
     name: 'GetBigQueryDataSets',
     description: 'Return all datasets in this Google BigQuery project.',
-    inputSchema: { type: 'object', properties: {} },
+    inputSchema: {
+        type: 'object',
+        required: ['profileId'],
+        properties: {
+            profileId: { type: 'string', description: 'Profile ID' }
+        }
+    },
     outputSchema: { type: 'array', items: { type: 'string' } },
-    handler: async () => httpGet('/datasets'),
+    handler: async ({ profileId }) => {
+        const url = `/datasets?profileId=${encodeURIComponent(profileId)}`;
+        return httpGet(url);
+    },
+});
+registerTool({
+    name: 'GetTables',
+    description: 'Get all tables in a specific dataset.',
+    inputSchema: {
+        type: 'object',
+        required: ['profileId', 'dataset'],
+        properties: {
+            profileId: { type: 'string', description: 'Profile ID' },
+            dataset: { type: 'string', description: 'Dataset name' }
+        },
+    },
+    outputSchema: { type: 'array', items: { type: 'string' } },
+    handler: async ({ profileId, dataset }) => {
+        const url = `/tables?profileId=${encodeURIComponent(profileId)}&dataset=${encodeURIComponent(dataset)}`;
+        return httpGet(url);
+    },
 });
 registerTool({
     name: 'GetTableGraph',
     description: 'Returns the tables, their schemas and how those tables are connected.',
     inputSchema: {
         type: 'object',
-        properties: { datasets: { type: 'array', items: { type: 'string' } } },
+        properties: {
+            profileId: { type: 'string', description: 'Profile ID (optional for legacy mode)' },
+            datasets: { type: 'array', items: { type: 'string' } }
+        },
     },
     outputSchema: { type: 'object' },
-    handler: async ({ datasets }) => httpPost('/graph', { datasets: datasets ?? [] }),
+    handler: async ({ profileId, datasets }) => httpPost('/graph', { profileId, datasets: datasets ?? [] }),
 });
 registerTool({
     name: 'GetRelevantQuestions',
@@ -57,13 +86,14 @@ registerTool({
         type: 'object',
         required: ['question'],
         properties: {
+            profileId: { type: 'string', description: 'Profile ID (optional for legacy mode)' },
             datasets: { type: 'array', items: { type: 'string' } },
             question: { type: 'string' },
             topK: { type: 'number' },
         },
     },
     outputSchema: { type: 'array', items: { type: 'object' } },
-    handler: async ({ datasets, question, topK }) => httpPost('/relevant-questions', { datasets: datasets ?? [], question, topK }),
+    handler: async ({ profileId, datasets, question, topK }) => httpPost('/relevant-questions', { profileId, datasets: datasets ?? [], question, topK }),
 });
 registerTool({
     name: 'GetUptoNDistinctStringValues',
@@ -72,6 +102,7 @@ registerTool({
         type: 'object',
         required: ['dataset', 'table', 'column'],
         properties: {
+            profileId: { type: 'string', description: 'Profile ID (optional for legacy mode)' },
             dataset: { type: 'string' },
             table: { type: 'string' },
             column: { type: 'string' },
@@ -79,8 +110,10 @@ registerTool({
         },
     },
     outputSchema: { type: 'array', items: { type: 'string' } },
-    handler: async ({ dataset, table, column, limit }) => {
+    handler: async ({ profileId, dataset, table, column, limit }) => {
         const u = new URL(`${ANALYST_BASE}/distinct-values`);
+        if (profileId)
+            u.searchParams.set('profileId', profileId);
         u.searchParams.set('dataset', dataset);
         u.searchParams.set('table', table);
         u.searchParams.set('column', column);
@@ -98,10 +131,15 @@ registerTool({
     inputSchema: {
         type: 'object',
         required: ['question', 'sql', 'dataset'],
-        properties: { question: { type: 'string' }, sql: { type: 'string' }, dataset: { type: 'string' } },
+        properties: {
+            profileId: { type: 'string', description: 'Profile ID (optional for legacy mode)' },
+            question: { type: 'string' },
+            sql: { type: 'string' },
+            dataset: { type: 'string' }
+        },
     },
     outputSchema: { type: 'object' },
-    handler: async ({ question, sql, dataset }) => httpPost('/validate-sql', { question, sql, dataset }),
+    handler: async ({ profileId, question, sql, dataset }) => httpPost('/validate-sql', { profileId, question, sql, dataset }),
 });
 registerTool({
     name: 'ExecuteSQL',
@@ -109,45 +147,91 @@ registerTool({
     inputSchema: {
         type: 'object',
         required: ['dataset', 'sql'],
-        properties: { dataset: { type: 'string' }, sql: { type: 'string' } },
+        properties: {
+            profileId: { type: 'string', description: 'Profile ID (optional for legacy mode)' },
+            dataset: { type: 'string' },
+            sql: { type: 'string' }
+        },
     },
     outputSchema: { type: 'object' },
-    handler: async ({ dataset, sql }) => httpPost('/execute-sql', { dataset, sql }),
+    handler: async ({ profileId, dataset, sql }) => httpPost('/execute-sql', { profileId, dataset, sql }),
 });
 // --- Resource management tools (persisted on backend) ---
 registerTool({
-    name: 'UpsertResource',
-    description: 'Create or update a resource (e.g., glossary/taxonomy) so it persists across sessions and is visible to the agent and backend.',
+    name: 'ListResources',
+    description: 'List all resources, or search resources by semantic similarity using query, topK, and type filters.',
     inputSchema: {
         type: 'object',
-        required: ['uri'],
+        required: ['q'],
         properties: {
-            uri: { type: 'string' },
-            name: { type: 'string' },
-            description: { type: 'string' },
-            mimeType: { type: 'string' },
-            tags: { type: 'array', items: { type: 'string' } },
-            text: { type: 'string' },
-            json: { type: 'object' },
+            q: { type: 'string', description: 'Search query for semantic similarity search' },
+            topK: { type: 'number', description: 'Number of top results to return (default: 10)' },
+            type: { type: 'string', enum: ['gen', 'reasoning', 'both', 'facts'], description: 'Filter by resource type' },
         },
-        oneOf: [
-            { required: ['text'] },
-            { required: ['json'] },
-        ],
+    },
+    outputSchema: { type: 'array', items: { type: 'object' } },
+    handler: async ({ q, topK, type }) => {
+        const params = new URLSearchParams();
+        if (q)
+            params.set('q', q);
+        if (topK != null)
+            params.set('topK', String(topK));
+        if (type)
+            params.set('type', type);
+        const query = params.toString();
+        const url = query ? `/resources?${query}` : '/resources';
+        return httpGet(url);
+    },
+});
+registerTool({
+    name: 'GetResource',
+    description: 'Get a single resource by ID or URI.',
+    inputSchema: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+            id: { type: 'string', description: 'Resource ID or URI' },
+        },
+    },
+    outputSchema: { type: 'object' },
+    handler: async ({ id }) => {
+        const url = `/resources/get?id=${encodeURIComponent(id)}`;
+        return httpGet(url);
+    },
+});
+registerTool({
+    name: 'UpsertResource',
+    description: 'Create or update a resource (e.g., glossary/taxonomy) so it persists across sessions and is visible to the agent and backend. Supports auto-embedding if text is provided without embedding.',
+    inputSchema: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+            id: { type: 'string', description: 'Resource ID/URI' },
+            title: { type: 'string' },
+            type: { type: 'string', description: 'Resource type: gen, reasoning, facts, etc.' },
+            text: { type: 'string' },
+            etag: { type: 'string' },
+            embedding: {
+                type: 'array',
+                items: { type: 'number' },
+                description: 'Optional embedding vector'
+            },
+        },
+        additionalProperties: false,
     },
     outputSchema: { type: 'object' },
     handler: async (args) => httpPost('/resources/upsert', args),
 });
 registerTool({
     name: 'DeleteResource',
-    description: 'Delete a resource by URI from the persistent backend.',
+    description: 'Delete a resource by ID from the persistent backend.',
     inputSchema: {
         type: 'object',
-        required: ['uri'],
-        properties: { uri: { type: 'string' } },
+        required: ['id'],
+        properties: { id: { type: 'string' } },
     },
     outputSchema: { type: 'object' },
-    handler: async ({ uri }) => httpPost('/resources/delete', { uri }),
+    handler: async ({ id }) => httpPost('/resources/delete', { id }),
 });
 // ---------------------------
 // MCP server (tools + resources)
@@ -180,38 +264,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 // ---------------------------
 // List known resources (proxied from backend)
 server.setRequestHandler(ListResourcesRequestSchema, async (_req) => {
-    const list = await httpGet('/resources/list');
+    const list = await httpGet('/resources');
     return {
         resources: list.map((r) => ({
-            uri: r.uri,
-            name: r.name ?? r.uri,
-            description: r.description ?? '',
-            mimeType: r.mimeType ?? 'text/plain',
+            uri: r.id,
+            name: r.title ?? r.id,
+            description: r.type ? `Type: ${r.type}` : '',
+            mimeType: 'text/plain',
         })),
     };
 });
-// Read a single resource content by URI
+// Read a single resource content by ID
 server.setRequestHandler(ReadResourceRequestSchema, async (req) => {
     const { uri } = req.params;
-    const r = await httpGet(`/resources/get?uri=${encodeURIComponent(uri)}`);
-    // Prefer JSON if present
-    if (r.mimeType === 'application/json' && r.json !== undefined) {
-        return {
-            contents: [
-                {
-                    uri: r.uri,
-                    mimeType: 'application/json',
-                    text: JSON.stringify(r.json, null, 2),
-                },
-            ],
-        };
-    }
-    // Fallback to text (or empty string)
+    const r = await httpGet(`/resources/get?id=${encodeURIComponent(uri)}`);
     return {
         contents: [
             {
-                uri: r.uri,
-                mimeType: r.mimeType ?? 'text/plain',
+                uri: r.id,
+                mimeType: 'text/plain',
                 text: r.text ?? '',
             },
         ],

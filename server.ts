@@ -73,9 +73,36 @@ function registerTool(def: ToolDef) {
 registerTool({
   name: 'GetBigQueryDataSets',
   description: 'Return all datasets in this Google BigQuery project.',
-  inputSchema: { type: 'object', properties: {} },
+  inputSchema: {
+    type: 'object',
+    required: ['profileId'],
+    properties: {
+      profileId: { type: 'string', description: 'Profile ID' }
+    }
+  },
   outputSchema: { type: 'array', items: { type: 'string' } },
-  handler: async () => httpGet<string[]>('/datasets'),
+  handler: async ({ profileId }) => {
+    const url = `/datasets?profileId=${encodeURIComponent(profileId)}`;
+    return httpGet<string[]>(url);
+  },
+});
+
+registerTool({
+  name: 'GetTables',
+  description: 'Get all tables in a specific dataset.',
+  inputSchema: {
+    type: 'object',
+    required: ['profileId', 'dataset'],
+    properties: {
+      profileId: { type: 'string', description: 'Profile ID' },
+      dataset: { type: 'string', description: 'Dataset name' }
+    },
+  },
+  outputSchema: { type: 'array', items: { type: 'string' } },
+  handler: async ({ profileId, dataset }) => {
+    const url = `/tables?profileId=${encodeURIComponent(profileId)}&dataset=${encodeURIComponent(dataset)}`;
+    return httpGet<string[]>(url);
+  },
 });
 
 registerTool({
@@ -83,10 +110,14 @@ registerTool({
   description: 'Returns the tables, their schemas and how those tables are connected.',
   inputSchema: {
     type: 'object',
-    properties: { datasets: { type: 'array', items: { type: 'string' } } },
+    properties: {
+      profileId: { type: 'string', description: 'Profile ID (optional for legacy mode)' },
+      datasets: { type: 'array', items: { type: 'string' } }
+    },
   },
   outputSchema: { type: 'object' },
-  handler: async ({ datasets }) => httpPost<any>('/graph', { datasets: datasets ?? [] }),
+  handler: async ({ profileId, datasets }) =>
+    httpPost<any>('/graph', { profileId, datasets: datasets ?? [] }),
 });
 
 registerTool({
@@ -96,14 +127,15 @@ registerTool({
     type: 'object',
     required: ['question'],
     properties: {
+      profileId: { type: 'string', description: 'Profile ID (optional for legacy mode)' },
       datasets: { type: 'array', items: { type: 'string' } },
       question: { type: 'string' },
       topK: { type: 'number' },
     },
   },
   outputSchema: { type: 'array', items: { type: 'object' } },
-  handler: async ({ datasets, question, topK }) =>
-      httpPost<any[]>('/relevant-questions', { datasets: datasets ?? [], question, topK }),
+  handler: async ({ profileId, datasets, question, topK }) =>
+      httpPost<any[]>('/relevant-questions', { profileId, datasets: datasets ?? [], question, topK }),
 });
 
 registerTool({
@@ -113,6 +145,7 @@ registerTool({
     type: 'object',
     required: ['dataset', 'table', 'column'],
     properties: {
+      profileId: { type: 'string', description: 'Profile ID (optional for legacy mode)' },
       dataset: { type: 'string' },
       table: { type: 'string' },
       column: { type: 'string' },
@@ -120,8 +153,9 @@ registerTool({
     },
   },
   outputSchema: { type: 'array', items: { type: 'string' } },
-  handler: async ({ dataset, table, column, limit }) => {
+  handler: async ({ profileId, dataset, table, column, limit }) => {
     const u = new URL(`${ANALYST_BASE}/distinct-values`);
+    if (profileId) u.searchParams.set('profileId', profileId);
     u.searchParams.set('dataset', dataset);
     u.searchParams.set('table', table);
     u.searchParams.set('column', column);
@@ -139,11 +173,16 @@ registerTool({
   inputSchema: {
     type: 'object',
     required: ['question', 'sql', 'dataset'],
-    properties: { question: { type: 'string' }, sql: { type: 'string' }, dataset: { type: 'string' } },
+    properties: {
+      profileId: { type: 'string', description: 'Profile ID (optional for legacy mode)' },
+      question: { type: 'string' },
+      sql: { type: 'string' },
+      dataset: { type: 'string' }
+    },
   },
   outputSchema: { type: 'object' },
-  handler: async ({ question, sql, dataset }) =>
-      httpPost<any>('/validate-sql', { question, sql, dataset }),
+  handler: async ({ profileId, question, sql, dataset }) =>
+      httpPost<any>('/validate-sql', { profileId, question, sql, dataset }),
 });
 
 registerTool({
@@ -153,10 +192,14 @@ registerTool({
   inputSchema: {
     type: 'object',
     required: ['dataset', 'sql'],
-    properties: { dataset: { type: 'string' }, sql: { type: 'string' } },
+    properties: {
+      profileId: { type: 'string', description: 'Profile ID (optional for legacy mode)' },
+      dataset: { type: 'string' },
+      sql: { type: 'string' }
+    },
   },
   outputSchema: { type: 'object' },
-  handler: async ({ dataset, sql }) => httpPost<any>('/execute-sql', { dataset, sql }),
+  handler: async ({ profileId, dataset, sql }) => httpPost<any>('/execute-sql', { profileId, dataset, sql }),
 });
 
 // --- Resource management tools (persisted on backend) ---
@@ -215,8 +258,13 @@ registerTool({
       type: { type: 'string', description: 'Resource type: gen, reasoning, facts, etc.' },
       text: { type: 'string' },
       etag: { type: 'string' },
-      embedding: { type: 'array', items: { type: 'number' } },
+      embedding: {
+        type: 'array',
+        items: { type: 'number' },
+        description: 'Optional embedding vector'
+      },
     },
+    additionalProperties: false,
   },
   outputSchema: { type: 'object' },
   handler: async (args) =>
