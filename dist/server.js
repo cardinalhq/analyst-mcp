@@ -156,7 +156,69 @@ registerTool({
     outputSchema: { type: 'object' },
     handler: async ({ profileId, dataset, sql }) => httpPost('/execute-sql', { profileId, dataset, sql }),
 });
-// --- Resource management tools (persisted on backend) ---
+registerTool({
+    name: 'GenerateVisualization',
+    description: 'Analyze SQL results and return an optimal chart type (bar, line, pie, scatter) with configuration for frontend visualization. If the user specifies a preferred chart type, that preference takes priority.',
+    inputSchema: {
+        type: 'object',
+        required: ['data'],
+        properties: {
+            data: {
+                type: 'object',
+                properties: {
+                    rows: { type: 'array', items: { type: 'object' } },
+                    schema: { type: 'array', items: { type: 'object' } },
+                },
+            },
+            preferredChart: {
+                type: 'string',
+                description: 'Explicit user-requested chart type (e.g. "pie", "bar", "line", "scatter").',
+                enum: ['bar', 'line', 'pie', 'scatter', 'table'],
+            },
+        },
+    },
+    outputSchema: {
+        type: 'object',
+        properties: {
+            chartType: { type: 'string' },
+            config: { type: 'object' },
+        },
+    },
+    handler: async ({ data, preferredChart }) => {
+        const rows = data?.rows ?? [];
+        if (rows.length === 0)
+            return { chartType: 'table', config: {} };
+        const firstRow = rows[0];
+        const columns = Object.keys(firstRow);
+        const numericCols = columns.filter((k) => typeof firstRow[k] === 'number');
+        const categoricalCols = columns.filter((k) => typeof firstRow[k] === 'string');
+        // --- Auto-detection logic ---
+        let inferredChartType = 'table';
+        if (numericCols.length === 1 && categoricalCols.length === 1)
+            inferredChartType = 'bar';
+        else if (numericCols.length === 1 && /time|date/i.test(categoricalCols[0]))
+            inferredChartType = 'line';
+        else if (numericCols.length >= 2)
+            inferredChartType = 'scatter';
+        else if (categoricalCols.length === 1)
+            inferredChartType = 'pie';
+        // --- Override with user preference if valid ---
+        const chartType = preferredChart || inferredChartType;
+        const config = {
+            labels: categoricalCols.length > 0
+                ? rows.map((r) => r[categoricalCols[0]])
+                : rows.map((_r, i) => i + 1),
+            datasets: numericCols.map((col) => ({
+                label: col,
+                data: rows.map((r) => r[col]),
+            })),
+        };
+        return { chartType, config };
+    },
+});
+// ---------------------------
+// Resource management tools
+// ---------------------------
 registerTool({
     name: 'ListResources',
     description: 'List all resources, or search resources by semantic similarity using query, topK, and type filters.',
