@@ -30,9 +30,60 @@ const tools = new Map();
 function registerTool(def) {
     tools.set(def.name, def);
 }
-// ---------------------------
-// Tool registrations
-// ---------------------------
+registerTool({
+    name: 'SuggestVisualization',
+    description: 'Return a Vega-Lite chart spec that best explains the answer. ' +
+        'Call this whenever a metric, trend, comparison, breakdown, or distribution would be clearer with a chart. ' +
+        'Prefer bar/line/area for trends and comparisons; scatter for relationships; ' +
+        'fallback to a table when data is sparse. Use the provided rows (preferred) or SQL if rows are large.',
+    inputSchema: {
+        type: 'object',
+        properties: {
+            profileId: { type: 'string', description: 'Profile ID (optional for legacy mode)' },
+            // Use EITHER rows (preferred) OR dataset+sql (backend will sample rows)
+            rows: {
+                type: 'array',
+                description: 'Result rows to visualize (ideally ≤ 2k).',
+                items: { type: 'object', additionalProperties: true }
+            },
+            dataset: { type: 'string', description: 'Dataset for SQL execution if rows omitted' },
+            sql: { type: 'string', description: 'Query used to produce the answer if rows omitted' },
+            // Optional hints
+            question: { type: 'string', description: 'Original user question to guide chart choice' },
+            prefer: { type: 'array', items: { type: 'string', enum: ['bar', 'line', 'area', 'scatter', 'table', 'map', 'pie', 'hist'] } },
+            maxSeries: { type: 'number', description: 'Cap number of series/categories (default 12)' },
+            maxRows: { type: 'number', description: 'Server-side sample limit when using SQL (default 2000)' }
+        },
+        additionalProperties: false
+    },
+    outputSchema: {
+        type: 'object',
+        required: ['format', 'spec'],
+        properties: {
+            format: { type: 'string', enum: ['vega-lite'] },
+            spec: { type: 'object' },
+            title: { type: 'string' },
+            rationale: { type: 'string' },
+            fields: {
+                type: 'object',
+                properties: {
+                    measures: { type: 'array', items: { type: 'string' } },
+                    dimensions: { type: 'array', items: { type: 'string' } },
+                    time: { type: 'string' },
+                    aggregation: { type: 'string' }
+                }
+            }
+        }
+    },
+    handler: async ({ profileId, rows, dataset, sql, question, prefer, maxSeries, maxRows }) => {
+        // Post to your backend viz suggester. The backend can:
+        //  - infer field types, choose encodings, and build a Vega-Lite spec
+        //  - inline data or reference a data URL (spec.data.values or spec.data.url)
+        //  - return rationale + detected fields
+        const payload = { profileId, rows, dataset, sql, question, prefer, maxSeries, maxRows };
+        return httpPost('/suggest-viz', payload);
+    }
+});
 registerTool({
     name: 'GetBigQueryDataSets',
     description: 'Return all datasets in this Google BigQuery project.',
