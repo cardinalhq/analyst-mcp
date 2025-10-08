@@ -226,9 +226,49 @@ registerTool({
 });
 
 registerTool({
+  name: 'SearchQuestionBank',
+  description:
+      'Search the question bank for similar questions and their SQL queries. ALWAYS call this FIRST before writing any SQL query or calling ExecuteSQL. Use topK=1 or topK=3 to find the most similar question. If a matching question is found with high similarity (>0.8), you should reuse its SQL query instead of writing a new one. This saves time and ensures consistency.',
+  inputSchema: {
+    type: 'object',
+    required: ['profileId', 'question'],
+    properties: {
+      profileId: { type: 'string', description: 'Profile ID' },
+      question: { type: 'string', description: 'Question to search for in the question bank' },
+      topK: { type: 'number', description: 'Number of top similar questions to return (default: 5)' }
+    },
+  },
+  outputSchema: {
+    type: 'array',
+    items: {
+      type: 'object',
+      required: ['entry', 'similarity'],
+      properties: {
+        entry: {
+          type: 'object',
+          required: ['question', 'sql'],
+          properties: {
+            question: { type: 'string' },
+            sql: { type: 'string' },
+            sqlFlowDiagram: { type: 'string' }
+          }
+        },
+        similarity: { type: 'number' }
+      }
+    }
+  },
+  handler: async (args) => {
+    const { profileId, question, topK } = args;
+    const k = topK ?? 5;
+    const encodedQuestion = encodeURIComponent(question);
+    return httpGet<any[]>(`/question-bank/${profileId}?question=${encodedQuestion}&k=${k}`);
+  },
+});
+
+registerTool({
   name: 'ExecuteSQL',
   description:
-      'Execute a SELECT/WITH query against a dataset with LLM validation and diagram generation. The question parameter is required and triggers validation before execution. Returns rows + validation evidence + diagram.',
+      'Execute a SELECT/WITH query against a dataset with LLM validation and diagram generation. The question parameter is required and triggers validation before execution. Returns rows + validation evidence + diagram. IMPORTANT: Before calling this tool, you should ALWAYS call SearchQuestionBank first to check if a similar question already exists with a working SQL query that you can reuse.',
   inputSchema: {
     type: 'object',
     required: ['profileId', 'credentials', 'dataset', 'sql', 'question'],
@@ -252,69 +292,35 @@ registerTool({
 
 registerTool({
   name: 'ListResources',
-  description: 'List all resources, or search resources by semantic similarity using query, topK, and type filters.',
+  description: 'List all resources.',
   inputSchema: {
     type: 'object',
-    required: ['q'],
-    properties: {
-      q: { type: 'string', description: 'Search query for semantic similarity search' },
-      topK: { type: 'number', description: 'Number of top results to return (default: 10)' },
-      type: { type: 'string', enum: ['gen', 'reasoning', 'both', 'facts'], description: 'Filter by resource type' },
-    },
+    properties: {},
   },
   outputSchema: { type: 'array', items: { type: 'object' } },
-  handler: async ({ q, topK, type }) => {
-    const params = new URLSearchParams();
-    if (q) params.set('q', q);
-    if (topK != null) params.set('topK', String(topK));
-    if (type) params.set('type', type);
-    const query = params.toString();
-    const url = query ? `/resources?${query}` : '/resources';
-    return httpGet<any[]>(url);
-  },
-});
-
-registerTool({
-  name: 'GetResource',
-  description: 'Get a single resource by ID or URI.',
-  inputSchema: {
-    type: 'object',
-    required: ['id'],
-    properties: {
-      id: { type: 'string', description: 'Resource ID or URI' },
-    },
-  },
-  outputSchema: { type: 'object' },
-  handler: async ({ id }) => {
-    const url = `/resources/get?id=${encodeURIComponent(id)}`;
-    return httpGet<any>(url);
+  handler: async () => {
+    return httpGet<any[]>('/resources');
   },
 });
 
 registerTool({
   name: 'UpsertResource',
   description:
-      'Create or update a resource (e.g., glossary/taxonomy) so it persists across sessions and is visible to the agent and backend. Supports auto-embedding if text is provided without embedding.',
+      'Create or update a resource (e.g., glossary/taxonomy) so it persists across sessions and is visible to the agent and backend.',
   inputSchema: {
     type: 'object',
     required: ['id'],
     properties: {
       id: { type: 'string', description: 'Resource ID/URI' },
       title: { type: 'string' },
-      type: { type: 'string', description: 'Resource type: gen, reasoning, facts, etc.' },
+      type: { type: 'string', description: 'Resource type: gen, reasoning, facts, glossary, taxonomy' },
       text: { type: 'string' },
-      etag: { type: 'string' },
-      embedding: {
-        type: 'array',
-        items: { type: 'number' },
-        description: 'Optional embedding vector'
-      },
     },
     additionalProperties: false,
   },
   outputSchema: { type: 'object' },
   handler: async (args) =>
-      httpPost<any>('/resources/upsert', args),
+      httpPost<any>('/resources', args),
 });
 
 registerTool({
@@ -326,8 +332,13 @@ registerTool({
     properties: { id: { type: 'string' } },
   },
   outputSchema: { type: 'object' },
-  handler: async ({ id }) =>
-      httpPost<{ status: string }>('/resources/delete', { id }),
+  handler: async ({ id }) => {
+    const res = await fetch(`${ANALYST_BASE}/resources/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) throw new Error(`/resources/${id} ${res.status}: ${await res.text()}`);
+    return (await res.json()) as { status: string };
+  },
 });
 
 // ---------------------------
@@ -407,7 +418,13 @@ server.setRequestHandler(ListResourcesRequestSchema, async (_req: ListResourcesR
 // Read a single resource content by ID
 server.setRequestHandler(ReadResourceRequestSchema, async (req: ReadResourceRequest) => {
   const { uri } = req.params;
-  const r = await httpGet<ResourceDoc>(`/resources/get?id=${encodeURIComponent(uri)}`);
+  // Get all resources and find the matching one
+  const list = await httpGet<ResourceDoc[]>('/resources');
+  const r = list.find(resource => resource.id === uri);
+
+  if (!r) {
+    throw new Error(`Resource not found: ${uri}`);
+  }
 
   return {
     contents: [
