@@ -26,6 +26,19 @@ async function httpGet(path) {
         throw new Error(`${path} ${res.status}: ${await res.text()}`);
     return (await res.json());
 }
+// Helper to extract and validate credentials from tool arguments
+function extractCredentials(args) {
+    if (!args.credentials) {
+        throw new Error('credentials parameter is required for BigQuery operations');
+    }
+    if (!args.profileId) {
+        throw new Error('profileId parameter is required for BigQuery operations');
+    }
+    return {
+        profileId: args.profileId,
+        credentials: args.credentials
+    };
+}
 const tools = new Map();
 function registerTool(def) {
     tools.set(def.name, def);
@@ -85,75 +98,47 @@ registerTool({
     }
 });
 registerTool({
-    name: 'GetBigQueryDataSets',
-    description: 'Return all datasets in this Google BigQuery project.',
+    name: 'GetTableGraph',
+    description: 'Returns the pre-built graph for this profile with tables, schemas, and connections based on attached datasets/tables. The datasets parameter is ignored when profileId is provided - the graph returns the scope attached to the profile.',
     inputSchema: {
         type: 'object',
-        required: ['profileId'],
-        properties: {
-            profileId: { type: 'string', description: 'Profile ID' }
-        }
-    },
-    outputSchema: { type: 'array', items: { type: 'string' } },
-    handler: async ({ profileId }) => {
-        const url = `/datasets?profileId=${encodeURIComponent(profileId)}`;
-        return httpGet(url);
-    },
-});
-registerTool({
-    name: 'GetTables',
-    description: 'Get all tables in a specific dataset.',
-    inputSchema: {
-        type: 'object',
-        required: ['profileId', 'dataset'],
+        required: ['profileId', 'credentials'],
         properties: {
             profileId: { type: 'string', description: 'Profile ID' },
-            dataset: { type: 'string', description: 'Dataset name' }
-        },
-    },
-    outputSchema: { type: 'array', items: { type: 'string' } },
-    handler: async ({ profileId, dataset }) => {
-        const url = `/tables?profileId=${encodeURIComponent(profileId)}&dataset=${encodeURIComponent(dataset)}`;
-        return httpGet(url);
-    },
-});
-registerTool({
-    name: 'GetTableGraph',
-    description: 'Returns the tables, their schemas and how those tables are connected.',
-    inputSchema: {
-        type: 'object',
-        properties: {
-            profileId: { type: 'string', description: 'Profile ID (optional for legacy mode)' },
-            datasets: { type: 'array', items: { type: 'string' } }
+            credentials: { type: 'string', description: 'JSON string of BigQuery credentials' }
         },
     },
     outputSchema: { type: 'object' },
-    handler: async ({ profileId, datasets }) => httpPost('/graph', { profileId, datasets: datasets ?? [] }),
+    handler: async (args) => {
+        const { profileId, credentials } = extractCredentials(args);
+        return httpPost('/graph', { profileId, credentials });
+    },
 });
 registerTool({
-    name: 'GetRelevantQuestions',
-    description: 'Given a question, return relevant questions ranked by similarity.',
+    name: 'CheckHealth',
+    description: 'Check health status of the server. When profileId is provided, returns whether the profile graph is ready (ready: true/false).',
     inputSchema: {
         type: 'object',
-        required: ['question'],
         properties: {
-            profileId: { type: 'string', description: 'Profile ID (optional for legacy mode)' },
-            datasets: { type: 'array', items: { type: 'string' } },
-            question: { type: 'string' },
-            topK: { type: 'number' },
+            profileId: { type: 'string', description: 'Optional profile ID to check if graph is ready' }
         },
     },
-    outputSchema: { type: 'array', items: { type: 'object' } },
-    handler: async ({ profileId, datasets, question, topK }) => httpPost('/relevant-questions', { profileId, datasets: datasets ?? [], question, topK }),
+    outputSchema: { type: 'object' },
+    handler: async (args) => {
+        const { profileId } = args;
+        const url = profileId ? `/health?profileId=${encodeURIComponent(profileId)}` : '/health';
+        return httpGet(url);
+    },
 });
 registerTool({
     name: 'GetUptoNDistinctStringValues',
-    description: 'Return up to limit distinct string values for a non-numeric column.',
+    description: 'Return up to limit distinct string values for a non-numeric column. Requires credentials.',
     inputSchema: {
         type: 'object',
-        required: ['dataset', 'table', 'column'],
+        required: ['profileId', 'credentials', 'dataset', 'table', 'column'],
         properties: {
-            profileId: { type: 'string', description: 'Profile ID (optional for legacy mode)' },
+            profileId: { type: 'string', description: 'Profile ID' },
+            credentials: { type: 'string', description: 'JSON string of BigQuery credentials' },
             dataset: { type: 'string' },
             table: { type: 'string' },
             column: { type: 'string' },
@@ -161,51 +146,40 @@ registerTool({
         },
     },
     outputSchema: { type: 'array', items: { type: 'string' } },
-    handler: async ({ profileId, dataset, table, column, limit }) => {
-        const u = new URL(`${ANALYST_BASE}/distinct-values`);
-        if (profileId)
-            u.searchParams.set('profileId', profileId);
-        u.searchParams.set('dataset', dataset);
-        u.searchParams.set('table', table);
-        u.searchParams.set('column', column);
-        if (limit != null)
-            u.searchParams.set('limit', String(limit));
-        const res = await fetch(u.toString());
-        if (!res.ok)
-            throw new Error(await res.text());
-        return (await res.json());
+    handler: async (args) => {
+        const { profileId, credentials } = extractCredentials(args);
+        const { dataset, table, column, limit } = args;
+        // For GET requests with credentials, we need to send them as a POST body instead
+        return httpPost('/distinct-values', {
+            profileId,
+            credentials,
+            dataset,
+            table,
+            column,
+            limit
+        });
     },
-});
-registerTool({
-    name: 'ValidateQuestionSQL',
-    description: 'Dry-run/EXPLAIN the SQL, then ask LLM if the generated SQL can correctly answer the question.',
-    inputSchema: {
-        type: 'object',
-        required: ['question', 'sql', 'dataset'],
-        properties: {
-            profileId: { type: 'string', description: 'Profile ID (optional for legacy mode)' },
-            question: { type: 'string' },
-            sql: { type: 'string' },
-            dataset: { type: 'string' }
-        },
-    },
-    outputSchema: { type: 'object' },
-    handler: async ({ profileId, question, sql, dataset }) => httpPost('/validate-sql', { profileId, question, sql, dataset }),
 });
 registerTool({
     name: 'ExecuteSQL',
-    description: 'Execute a validated SELECT/WITH query against a dataset and return rows + evidence that the query was indeed correct.',
+    description: 'Execute a SELECT/WITH query against a dataset with LLM validation and diagram generation. The question parameter is required and triggers validation before execution. Returns rows + validation evidence + diagram.',
     inputSchema: {
         type: 'object',
-        required: ['dataset', 'sql'],
+        required: ['profileId', 'credentials', 'dataset', 'sql', 'question'],
         properties: {
-            profileId: { type: 'string', description: 'Profile ID (optional for legacy mode)' },
+            profileId: { type: 'string', description: 'Profile ID' },
+            credentials: { type: 'string', description: 'JSON string of BigQuery credentials' },
             dataset: { type: 'string' },
-            sql: { type: 'string' }
+            sql: { type: 'string' },
+            question: { type: 'string', description: 'Original question - required for LLM validation and diagram generation' }
         },
     },
     outputSchema: { type: 'object' },
-    handler: async ({ profileId, dataset, sql }) => httpPost('/execute-sql', { profileId, dataset, sql }),
+    handler: async (args) => {
+        const { profileId, credentials } = extractCredentials(args);
+        const { dataset, sql, question } = args;
+        return httpPost('/execute-sql', { profileId, credentials, dataset, sql, question });
+    },
 });
 // --- Resource management tools (persisted on backend) ---
 registerTool({
@@ -308,6 +282,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         throw new Error(`Unknown tool: ${name}`);
     const def = tools.get(name);
     const result = await def.handler(args ?? {});
+    // Special handling for ExecuteSQL which returns a Mermaid diagram
+    // The diagram is in result.evidence.sql_flow_diagram
+    if (name === 'ExecuteSQL' && result && typeof result === 'object' &&
+        result.evidence && result.evidence.sql_flow_diagram) {
+        const content = [];
+        // Add the main result as text
+        content.push({ type: 'text', text: JSON.stringify(result) });
+        // Add the Mermaid diagram as a resource
+        if (typeof result.evidence.sql_flow_diagram === 'string') {
+            content.push({
+                type: 'resource',
+                resource: {
+                    uri: `mermaid://sql-execution-diagram/${Date.now()}`,
+                    mimeType: 'text/vnd.mermaid',
+                    text: result.evidence.sql_flow_diagram
+                }
+            });
+        }
+        return { content };
+    }
     return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 });
 // ---------------------------
