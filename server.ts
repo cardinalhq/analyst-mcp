@@ -385,6 +385,28 @@ registerTool({
   },
 });
 
+registerTool({
+  name: 'DeleteQuestion',
+  description: 'Delete a specific question from a profile\'s question bank. Use this to remove outdated or incorrect questions.',
+  inputSchema: {
+    type: 'object',
+    required: ['profileId', 'question'],
+    properties: {
+      profileId: { type: 'string', description: 'Profile ID' },
+      question: { type: 'string', description: 'The exact question text to delete' }
+    },
+  },
+  outputSchema: { type: 'object' },
+  handler: async ({ profileId, question }) => {
+    const encodedQuestion = encodeURIComponent(question);
+    const res = await fetch(`${ANALYST_BASE}/question-bank/${encodeURIComponent(profileId)}?question=${encodedQuestion}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) throw new Error(`/question-bank/${profileId} ${res.status}: ${await res.text()}`);
+    return (await res.json()) as { status: string };
+  },
+});
+
 // ---------------------------
 // MCP server (tools + resources)
 // ---------------------------
