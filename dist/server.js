@@ -222,27 +222,71 @@ registerTool({
 // --- Resource management tools (persisted on backend) ---
 registerTool({
     name: 'ListResources',
-    description: 'List all resources.',
+    description: 'PRIMARY TOOL for understanding domain-specific terminology, glossary terms, business definitions, and customer-specific knowledge. ' +
+        'ALWAYS call this tool FIRST when encountering unfamiliar terms, business concepts, or domain-specific vocabulary in user questions. ' +
+        'Examples: When user asks about "customers", "revenue", "conversions", or any business term - search this FIRST to understand the specific definition in this domain. ' +
+        'Uses semantic similarity search (powered by embeddings) to find the most relevant resources. ' +
+        'Returns: glossary definitions, taxonomies, business rules, metrics definitions, and other domain knowledge. ' +
+        'RECOMMENDED WORKFLOW: 1) Search ListResources for key terms in question → 2) Use definitions to guide SQL/analysis. ' +
+        'Without a query, returns all available resources.',
     inputSchema: {
         type: 'object',
-        properties: {},
+        properties: {
+            query: {
+                type: 'string',
+                description: 'Natural language query to search for relevant resources using semantic similarity. Example: "What is a customer?" or "revenue calculation rules"'
+            },
+            topK: {
+                type: 'number',
+                description: 'Number of top similar resources to return (default: 10). Only used when query is provided.'
+            }
+        },
     },
-    outputSchema: { type: 'array', items: { type: 'object' } },
-    handler: async () => {
-        return httpGet('/resources');
+    outputSchema: {
+        type: 'array',
+        items: {
+            type: 'object',
+            properties: {
+                resource: {
+                    type: 'object',
+                    properties: {
+                        id: { type: 'string' },
+                        title: { type: 'string' },
+                        type: { type: 'string' },
+                        text: { type: 'string' }
+                    }
+                },
+                similarity: { type: 'number', description: 'Similarity score (0-1) when using semantic search' }
+            }
+        }
+    },
+    handler: async (args) => {
+        const { query, topK } = args;
+        if (query) {
+            // Semantic search mode
+            const k = topK ?? 10;
+            const encodedQuery = encodeURIComponent(query);
+            return httpGet(`/resources?query=${encodedQuery}&k=${k}`);
+        }
+        else {
+            // List all resources
+            return httpGet('/resources');
+        }
     },
 });
 registerTool({
     name: 'UpsertResource',
-    description: 'Create or update a resource (e.g., glossary/taxonomy) so it persists across sessions and is visible to the agent and backend.',
+    description: 'Create or update a resource (e.g., glossary/taxonomy) that persists across sessions. ' +
+        'The resource text is automatically embedded using OpenAI embeddings, enabling semantic search via ListResources. ' +
+        'Use this to store domain knowledge, business rules, definitions, or any context that should be searchable later.',
     inputSchema: {
         type: 'object',
-        required: ['id'],
+        required: ['id', 'title', 'type', 'text'],
         properties: {
-            id: { type: 'string', description: 'Resource ID/URI' },
-            title: { type: 'string' },
-            type: { type: 'string', description: 'Resource type: gen, reasoning, facts, glossary, taxonomy' },
-            text: { type: 'string' },
+            id: { type: 'string', description: 'Unique resource ID/URI (e.g., "glossary-customer", "rule-revenue-calc")' },
+            title: { type: 'string', description: 'Human-readable title' },
+            type: { type: 'string', description: 'Resource type: glossary, taxonomy, facts, reasoning, gen' },
+            text: { type: 'string', description: 'Resource content - will be embedded for semantic search' },
         },
         additionalProperties: false,
     },
