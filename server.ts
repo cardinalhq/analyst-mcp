@@ -36,17 +36,40 @@ async function httpGet<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-// Helper to extract and validate credentials from tool arguments
-function extractCredentials(args: any): { profileId: string; credentials?: string } {
-  if (!args.credentials) {
-    throw new Error('credentials parameter is required for BigQuery operations');
+// Helper to read credentials from environment
+function getCredentialsFromEnv(): string {
+  // First check if credentials are provided directly as JSON
+  const credentialsJson = process.env.GOOGLE_CREDENTIALS_JSON;
+  if (credentialsJson) {
+    return credentialsJson;
   }
+
+  // Otherwise, try to read from the credentials file path
+  const credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (credentialsPath) {
+    try {
+      const fs = require('fs');
+      const credentials = fs.readFileSync(credentialsPath, 'utf8');
+      return credentials;
+    } catch (error) {
+      throw new Error(`Failed to read credentials from ${credentialsPath}: ${error}`);
+    }
+  }
+
+  throw new Error('No credentials found. Set either GOOGLE_CREDENTIALS_JSON or GOOGLE_APPLICATION_CREDENTIALS environment variable');
+}
+
+// Helper to extract and validate credentials from environment
+function extractCredentials(args: any): { profileId: string; credentials: string } {
   if (!args.profileId) {
     throw new Error('profileId parameter is required for BigQuery operations');
   }
+
+  const credentials = getCredentialsFromEnv();
+
   return {
     profileId: args.profileId,
-    credentials: args.credentials
+    credentials
   };
 }
 
@@ -159,19 +182,20 @@ registerTool({
 
 registerTool({
   name: 'GetTableGraph',
-  description: 'Returns the pre-built graph for this profile with tables, schemas, and connections based on attached datasets/tables. The datasets parameter is ignored when profileId is provided - the graph returns the scope attached to the profile.',
+  description: 'Returns the pre-built graph for this profile with tables, schemas, and connections based on attached datasets/tables. When a question is provided, the graph is filtered to show only tables relevant to answering that question. Always provide a question to get a focused, relevant graph.',
   inputSchema: {
     type: 'object',
-    required: ['profileId', 'credentials'],
+    required: ['profileId'],
     properties: {
       profileId: { type: 'string', description: 'Profile ID' },
-      credentials: { type: 'string', description: 'JSON string of BigQuery credentials' }
+      question: { type: 'string', description: 'Optional question to filter the graph to only relevant tables. Highly recommended to provide this for better results.' }
     },
   },
   outputSchema: { type: 'object' },
   handler: async (args) => {
     const { profileId, credentials } = extractCredentials(args);
-    return httpPost<any>('/graph', { profileId, credentials });
+    const { question } = args;
+    return httpPost<any>('/graph', { profileId, credentials, question });
   },
 });
 
@@ -196,13 +220,12 @@ registerTool({
 
 registerTool({
   name: 'GetUptoNDistinctStringValues',
-  description: 'Return up to limit distinct string values for a non-numeric column. Requires credentials.',
+  description: 'Return up to limit distinct string values for a non-numeric column.',
   inputSchema: {
     type: 'object',
-    required: ['profileId', 'credentials', 'dataset', 'table', 'column'],
+    required: ['profileId', 'dataset', 'table', 'column'],
     properties: {
       profileId: { type: 'string', description: 'Profile ID' },
-      credentials: { type: 'string', description: 'JSON string of BigQuery credentials' },
       dataset: { type: 'string' },
       table: { type: 'string' },
       column: { type: 'string' },
@@ -271,10 +294,9 @@ registerTool({
       'Execute a SELECT/WITH query against a dataset with LLM validation and diagram generation. The question parameter is required and triggers validation before execution. Returns rows + validation evidence + diagram. IMPORTANT: Before calling this tool, you should ALWAYS call SearchQuestionBank first to check if a similar question already exists with a working SQL query that you can reuse.',
   inputSchema: {
     type: 'object',
-    required: ['profileId', 'credentials', 'dataset', 'sql', 'question'],
+    required: ['profileId', 'dataset', 'sql', 'question'],
     properties: {
       profileId: { type: 'string', description: 'Profile ID' },
-      credentials: { type: 'string', description: 'JSON string of BigQuery credentials' },
       dataset: { type: 'string' },
       sql: { type: 'string' },
       question: { type: 'string', description: 'Original question - required for LLM validation and diagram generation' }
