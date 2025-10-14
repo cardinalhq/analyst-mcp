@@ -32,3 +32,6 @@ vendor
 **/*.duckdb_extension
 *.go
 .idea
+
+dist
+node_modules
