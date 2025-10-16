@@ -254,17 +254,24 @@ registerTool({
         description:
           "Optional question to filter the graph to only relevant tables. Highly recommended to provide this for better results.",
       },
+      tables: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "Optional array of specific table IDs to filter the graph to (e.g., ['dataset.table1', 'dataset.table2']). If not provided, uses all attached tables.",
+      },
     },
   },
   outputSchema: { type: "object" },
   handler: async (args) => {
     const { profileId, datasourceId, credentials } = extractCredentials(args);
-    const { question } = args;
+    const { question, tables } = args;
     return httpPost<any>("/graph", {
       profileId,
       datasourceId,
       credentials,
       question,
+      tables,
     });
   },
 });
