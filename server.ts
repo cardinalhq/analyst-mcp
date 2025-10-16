@@ -338,9 +338,10 @@ registerTool({
     "Search the question bank for similar questions and their SQL queries. ALWAYS call this FIRST before writing any SQL query or calling ExecuteSQL. Use topK=1 or topK=3 to find the most similar question. If a matching question is found with high similarity (>0.8), you should reuse its SQL query instead of writing a new one. This saves time and ensures consistency.",
   inputSchema: {
     type: "object",
-    required: ["profileId", "question"],
+    required: ["profileId", "datasourceId", "question"],
     properties: {
       profileId: { type: "string", description: "Profile ID" },
+      datasourceId: { type: "string", description: "Datasource ID" },
       question: {
         type: "string",
         description: "Question to search for in the question bank",
@@ -371,11 +372,11 @@ registerTool({
     },
   },
   handler: async (args) => {
-    const { profileId, question, topK } = args;
+    const { profileId, datasourceId, question, topK } = args;
     const k = topK ?? 5;
     const encodedQuestion = encodeURIComponent(question);
     return httpGet<any[]>(
-      `/question-bank/${profileId}?question=${encodedQuestion}&k=${k}`
+      `/question-bank/${profileId}?question=${encodedQuestion}&k=${k}&datasourceId=${encodeURIComponent(datasourceId)}`
     );
   },
 });
@@ -535,9 +536,10 @@ registerTool({
     "Delete a specific question from a profile's question bank. Use this to remove outdated or incorrect questions.",
   inputSchema: {
     type: "object",
-    required: ["profileId", "question"],
+    required: ["profileId", "datasourceId", "question"],
     properties: {
       profileId: { type: "string", description: "Profile ID" },
+      datasourceId: { type: "string", description: "Datasource ID" },
       question: {
         type: "string",
         description: "The exact question text to delete",
@@ -545,12 +547,12 @@ registerTool({
     },
   },
   outputSchema: { type: "object" },
-  handler: async ({ profileId, question }) => {
+  handler: async ({ profileId, datasourceId, question }) => {
     const encodedQuestion = encodeURIComponent(question);
     const res = await fetch(
       `${ANALYST_BASE}/question-bank/${encodeURIComponent(
         profileId
-      )}?question=${encodedQuestion}`,
+      )}?question=${encodedQuestion}&datasourceId=${encodeURIComponent(datasourceId)}`,
       {
         method: "DELETE",
       }
