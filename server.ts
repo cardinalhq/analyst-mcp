@@ -242,7 +242,11 @@ registerTool({
 registerTool({
   name: "GetTableGraph",
   description:
-    "Returns the pre-built graph for this profile with tables, schemas, and connections based on attached datasets/tables. When a question is provided, the graph is filtered to show only tables relevant to answering that question. Always provide a question to get a focused, relevant graph.",
+    "Returns the pre-built graph for this profile with tables, schemas, and connections based on attached datasets/tables. " +
+    "When a question is provided, the graph is filtered to show only tables relevant to answering that question. " +
+    "AUTOMATICALLY includes relevant resources (glossary, business definitions, domain knowledge) scoped to the datasource and tables. " +
+    "This provides complete context: table schemas + business rules + definitions in one call. " +
+    "Always provide a question to get a focused, relevant graph with context.",
   inputSchema: {
     type: "object",
     required: ["profileId", "datasourceId"],
@@ -252,7 +256,7 @@ registerTool({
       question: {
         type: "string",
         description:
-          "Optional question to filter the graph to only relevant tables. Highly recommended to provide this for better results.",
+          "Optional question to filter the graph to only relevant tables and resources. Highly recommended to provide this for better results.",
       },
       tables: {
         type: "array",
@@ -262,17 +266,74 @@ registerTool({
       },
     },
   },
-  outputSchema: { type: "object" },
+  outputSchema: {
+    type: "object",
+    properties: {
+      tables: { type: "array", description: "Table definitions with schemas" },
+      edges: { type: "array", description: "Foreign key relationships" },
+      resources: {
+        type: "array",
+        description:
+          "Relevant resources (glossary, domain knowledge) scoped to this datasource and tables",
+      },
+    },
+  },
   handler: async (args) => {
     const { profileId, datasourceId, credentials } = extractCredentials(args);
     const { question, tables } = args;
-    return httpPost<any>("/graph", {
+
+    // Fetch table graph
+    const graph = await httpPost<any>("/graph", {
       profileId,
       datasourceId,
       credentials,
       question,
       tables,
     });
+
+    // Automatically fetch relevant resources scoped to this datasource/tables
+    let resources: any[] = [];
+    try {
+      const resourcesPayload: any = {
+        datasourceId,
+        tables: graph.tables?.map((t: any) => t.id) || [],
+      };
+
+      // If we have a question, use semantic search to get most relevant resources
+      if (question) {
+        resourcesPayload.query = question;
+        resourcesPayload.topK = 5; // Get top 5 most relevant
+      }
+
+      const resourcesResult = await httpPost<any>(
+        "/resources/for-datasource",
+        resourcesPayload
+      );
+
+      // Extract resources from similarity scores if using semantic search
+      if (Array.isArray(resourcesResult) && resourcesResult.length > 0) {
+        if (resourcesResult[0].resource) {
+          // Semantic search mode - extract resources from similarity scores
+          resources = resourcesResult.map((score: any) => ({
+            ...score.resource,
+            similarity: score.similarity,
+          }));
+        } else {
+          // List mode - resources are returned directly
+          resources = resourcesResult;
+        }
+      }
+    } catch (err) {
+      // Don't fail the entire request if resources fetch fails
+      console.error("[GetTableGraph] Failed to fetch resources:", err);
+      resources = [];
+    }
+
+    // Return combined graph + resources
+    return {
+      ...graph,
+      resources,
+    };
   },
 });
 
@@ -383,7 +444,9 @@ registerTool({
     const k = topK ?? 5;
     const encodedQuestion = encodeURIComponent(question);
     return httpGet<any[]>(
-      `/question-bank/${profileId}?question=${encodedQuestion}&k=${k}&datasourceId=${encodeURIComponent(datasourceId)}`
+      `/question-bank/${profileId}?question=${encodedQuestion}&k=${k}&datasourceId=${encodeURIComponent(
+        datasourceId
+      )}`
     );
   },
 });
@@ -489,7 +552,8 @@ registerTool({
   description:
     "Create or update a resource (e.g., glossary/taxonomy) that persists across sessions. " +
     "The resource text is automatically embedded using OpenAI embeddings, enabling semantic search via ListResources. " +
-    "Use this to store domain knowledge, business rules, definitions, or any context that should be searchable later.",
+    "Use this to store domain knowledge, business rules, definitions, or any context that should be searchable later. " +
+    "OPTIONAL: Attach resources to specific datasources and tables for scoped retrieval.",
   inputSchema: {
     type: "object",
     required: ["id", "title", "type", "text"],
@@ -508,11 +572,67 @@ registerTool({
         type: "string",
         description: "Resource content - will be embedded for semantic search",
       },
+      attachedDatasources: {
+        type: "object",
+        description:
+          "Optional: Attach resource to specific datasources and tables. " +
+          "Key = datasourceId, Value = array of tables. " +
+          "If omitted/empty, resource is global (applies to all datasources). " +
+          'Use ["*"] or ["all"] for all tables in a datasource. ' +
+          'Example: {"datasource-123": ["dataset.table1", "dataset.table2"]}',
+        additionalProperties: {
+          type: "array",
+          items: { type: "string" },
+        },
+      },
     },
     additionalProperties: false,
   },
   outputSchema: { type: "object" },
   handler: async (args) => httpPost<any>("/resources", args),
+});
+
+registerTool({
+  name: "GetResourcesForDatasource",
+  description:
+    "Retrieve resources filtered by datasource and optional tables. " +
+    "Returns global resources (no datasource attachment) PLUS resources attached to the specified datasource. " +
+    "RECOMMENDED: Use this when querying about specific datasources/tables to get relevant domain knowledge. " +
+    "For BigQuery datasources, you can optionally filter by specific tables.",
+  inputSchema: {
+    type: "object",
+    required: ["datasourceId"],
+    properties: {
+      datasourceId: {
+        type: "string",
+        description: "The datasource ID to filter resources by",
+      },
+      tables: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          'Optional: Specific tables to filter by (e.g., ["dataset.table1", "dataset.table2"]). If omitted, returns all resources for the datasource.',
+      },
+      query: {
+        type: "string",
+        description:
+          "Optional: Natural language query for semantic similarity search",
+      },
+      topK: {
+        type: "number",
+        description:
+          "Optional: Number of top similar resources to return when using query (default: 10)",
+      },
+    },
+  },
+  outputSchema: {
+    type: "array",
+    description:
+      "Array of resources or resource similarity scores (if query provided)",
+  },
+  handler: async (args) => {
+    return httpPost<any>("/resources/for-datasource", args);
+  },
 });
 
 registerTool({
@@ -559,7 +679,9 @@ registerTool({
     const res = await fetch(
       `${ANALYST_BASE}/question-bank/${encodeURIComponent(
         profileId
-      )}?question=${encodedQuestion}&datasourceId=${encodeURIComponent(datasourceId)}`,
+      )}?question=${encodedQuestion}&datasourceId=${encodeURIComponent(
+        datasourceId
+      )}`,
       {
         method: "DELETE",
       }
