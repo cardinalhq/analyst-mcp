@@ -242,11 +242,11 @@ registerTool({
 registerTool({
   name: "GetTableGraph",
   description:
-    "Returns the pre-built graph for this profile with tables, schemas, and connections based on attached datasets/tables. " +
-    "When a question is provided, the graph is filtered to show only tables relevant to answering that question. " +
-    "AUTOMATICALLY includes relevant resources (glossary, business definitions, domain knowledge) scoped to the datasource and tables. " +
-    "This provides complete context: table schemas + business rules + definitions in one call. " +
-    "Always provide a question to get a focused, relevant graph with context.",
+    "PRIMARY TOOL for getting complete database context in one call. Returns: (1) Table schemas, columns, and relationships AND (2) Relevant business context resources (glossary, definitions, domain knowledge). " +
+    "When a question is provided, automatically uses semantic search to include the TOP 5 most relevant resources for that question - NO NEED to call ListResources separately. " +
+    "Resources are scoped to the datasource and filtered by relevance to your question. " +
+    "This provides COMPLETE context: table schemas + business rules + definitions in ONE call. " +
+    "Always provide a question to get a focused, relevant graph with all necessary business context.",
   inputSchema: {
     type: "object",
     required: ["profileId", "datasourceId"],
@@ -490,12 +490,11 @@ registerTool({
 registerTool({
   name: "ListResources",
   description:
-    "PRIMARY TOOL for understanding domain-specific terminology, glossary terms, business definitions, and customer-specific knowledge. " +
-    "ALWAYS call this tool FIRST when encountering unfamiliar terms, business concepts, or domain-specific vocabulary in user questions. " +
-    'Examples: When user asks about "customers", "revenue", "conversions", or any business term - search this FIRST to understand the specific definition in this domain. ' +
+    "Search for domain-specific terminology, glossary terms, business definitions, and customer-specific knowledge across ALL datasources. " +
+    "IMPORTANT: If you've already called GetTableGraph with a question, relevant resources are ALREADY included in that response - check the 'resources' field first before calling this tool. " +
+    "Use this tool for: (1) Exploring all available resources globally, (2) Searching resources not scoped to a specific datasource, (3) When you need more than the top 5 resources included in GetTableGraph. " +
     "Uses semantic similarity search (powered by embeddings) to find the most relevant resources. " +
     "Returns: glossary definitions, taxonomies, business rules, metrics definitions, and other domain knowledge. " +
-    "RECOMMENDED WORKFLOW: 1) Search ListResources for key terms in question → 2) Use definitions to guide SQL/analysis. " +
     "Without a query, returns all available resources.",
   inputSchema: {
     type: "object",
